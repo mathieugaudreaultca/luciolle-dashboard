@@ -62,7 +62,7 @@ def generate_brief(article):
 - Possible impact on stakeholders or industry  
 - Signals government priorities  
 
-[Read more]({article['link']})
+{article['link']}
 """
 
 
@@ -124,4 +124,3 @@ else:
 if st.checkbox("Show raw data"):
     df = pd.DataFrame(relevant)
     st.dataframe(df)
-``
