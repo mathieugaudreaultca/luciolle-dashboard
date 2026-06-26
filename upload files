@@ -1,0 +1,25 @@
+uploaded_file = st.file_uploader("Upload a briefing sample", type=["txt", "pdf"])
+
+reference_text = ""
+
+if uploaded_file is not None:
+    reference_text = uploaded_file.read().decode("utf-8", errors="ignore")
+
+def generate_brief(article):
+
+    return f"""
+### {article['title']}
+
+**Reference Style (from uploaded file):**  
+{reference_text[:500]}
+
+**Summary:**  
+{article['summary'][:300]}...
+
+**Implications:**  
+- Policy relevance  
+- Stakeholder impact  
+- Strategic signal  
+
+{article['link']}
+"""
