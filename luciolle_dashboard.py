@@ -1,11 +1,16 @@
 import streamlit as st
 import feedparser
 import pandas as pd
+from io import StringIO
+
+# PDF + Word support
+from PyPDF2 import PdfReader
+import docx
 
 # -----------------------------
 # PAGE CONFIG
 # -----------------------------
-st.set_page_config(page_title="Luciolle Agent", layout="wide")
+st.set_page_config(page_title="Luciolle Copilot", layout="wide")
 
 # -----------------------------
 # DATA SOURCES
@@ -13,8 +18,7 @@ st.set_page_config(page_title="Luciolle Agent", layout="wide")
 SOURCES = {
     "Federal (Canada)": "https://www.canada.ca/en/news/web-feeds/all.atom.xml",
     "BC Government": "https://news.gov.bc.ca/en/feed",
-    "Ontario Government": "https://news.ontario.ca/feed/en",
-    "CBC News": "https://www.cbc.ca/cmlink/rss-topstories"
+    "Ontario Government": "https://news.ontario.ca/feed/en"
 }
 
 KEYWORDS = [
@@ -24,16 +28,30 @@ KEYWORDS = [
 ]
 
 # -----------------------------
-# STATE (CHAT MEMORY)
+# SESSION STATE
 # -----------------------------
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-if "reference_text" not in st.session_state:
-    st.session_state.reference_text = ""
+if "knowledge_base" not in st.session_state:
+    st.session_state.knowledge_base = ""
 
 # -----------------------------
-# FUNCTIONS
+# FILE PROCESSING
+# -----------------------------
+def read_pdf(file):
+    text = ""
+    reader = PdfReader(file)
+    for page in reader.pages:
+        text += page.extract_text() or ""
+    return text
+
+def read_docx(file):
+    doc = docx.Document(file)
+    return "\n".join([p.text for p in doc.paragraphs])
+
+# -----------------------------
+# DATA FETCHING
 # -----------------------------
 def fetch_feed(url):
     try:
@@ -42,152 +60,135 @@ def fetch_feed(url):
 
         for entry in feed.entries:
             articles.append({
-                "title": entry.get("title", "No title"),
-                "summary": entry.get("summary", "No summary"),
-                "link": entry.get("link", "#")
+                "title": entry.get("title", ""),
+                "summary": entry.get("summary", ""),
+                "link": entry.get("link", "")
             })
 
         return articles
     except:
         return []
 
-
 def is_relevant(article):
     text = (article["title"] + article["summary"]).lower()
-    return any(keyword in text for keyword in KEYWORDS)
+    return any(k in text for k in KEYWORDS)
 
+# -----------------------------
+# COPILOT RESPONSE
+# -----------------------------
+def luciolle_response(query, articles, knowledge):
+    context = "\n\n".join(
+        [f"{a['title']}: {a['summary']}" for a in articles[:5]]
+    )
 
-def generate_brief(article, reference_text):
-    return f"""
-### {article['title']}
+    response = f"""
+### Luciolle Analysis
 
-**Context (from your uploaded document):**  
-{reference_text[:300] if reference_text else "No reference uploaded."}
+**Your Question:**  
+{query}
 
-**Summary:**  
-{article['summary'][:300]}...
+---
 
-**Implications:**  
-- Policy or funding signal  
-- Stakeholder impact  
-- Government priority indicator  
+### Relevant Government Signals
+{context[:1000]}
 
-{article['link']}
+---
+
+### Learned Briefing Style / Knowledge
+{knowledge[:1000] if knowledge else "No documents uploaded yet."}
+
+---
+
+### Insight
+- Key developments suggest evolving policy direction
+- Potential implications for stakeholders and funding access
+- Alignment with government priorities should be assessed
+
+### Recommended Executive Takeaway
+Monitor closely and align internal strategy with emerging signals.
 """
 
-
-def luciolle_chat(user_input, articles, reference_text):
-    context = "\n\n".join([a["title"] + ": " + a["summary"] for a in articles[:5]])
-
-    reply = f"""
-**Luciolle Analysis**
-
-User question: {user_input}
-
-Relevant recent signals:
-{context[:800]}
-
-Reference briefing style:
-{reference_text[:400] if reference_text else "No reference provided."}
-
-🧠 Insight:
-- This question relates to current policy developments
-- Key risks and opportunities should be monitored
-
-✅ Recommended takeaway:
-Continue monitoring announcements related to this topic
-"""
-
-    return reply
-
+    return response
 
 # -----------------------------
-# UI
+# UI LAYOUT (COPILOT STYLE)
 # -----------------------------
-st.title("🟢 Luciolle — Policy Intelligence Agent")
+st.title("🟢 Luciolle Copilot")
 
-# Sidebar controls
-st.sidebar.header("Monitoring Controls")
-
-selected_source = st.sidebar.selectbox(
-    "Select Source",
-    list(SOURCES.keys())
-)
-
-keyword_filter = st.sidebar.text_input("Keyword filter")
-max_items = st.sidebar.slider("Number of briefs", 5, 20, 10)
+col1, col2 = st.columns([2, 1])
 
 # -----------------------------
-# FILE UPLOAD
+# LEFT SIDE: CHAT
 # -----------------------------
-st.sidebar.header("📄 Upload Reference Brief")
+with col1:
+    st.subheader("💬 Ask Luciolle")
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload briefing sample (txt or pdf)",
-    type=["txt", "pdf"]
-)
+    user_query = st.text_area("Type your question here")
 
-if uploaded_file is not None:
-    try:
-        file_content = uploaded_file.read()
-        st.session_state.reference_text = file_content.decode("utf-8", errors="ignore")
-        st.sidebar.success("Reference uploaded ✅")
-    except:
-        st.sidebar.error("Could not read file")
+    if st.button("Run Analysis"):
+        articles = fetch_feed(list(SOURCES.values())[0])
+        relevant = [a for a in articles if is_relevant(a)]
 
-# -----------------------------
-# FETCH DATA
-# -----------------------------
-with st.spinner("Collecting government announcements..."):
-    articles = fetch_feed(SOURCES[selected_source])
+        answer = luciolle_response(
+            user_query,
+            relevant,
+            st.session_state.knowledge_base
+        )
 
-relevant_articles = [a for a in articles if is_relevant(a)]
+        st.session_state.chat_history.append(("You", user_query))
+        st.session_state.chat_history.append(("Luciolle", answer))
 
-if keyword_filter:
-    relevant_articles = [
-        a for a in relevant_articles
-        if keyword_filter.lower() in (a["title"] + a["summary"]).lower()
-    ]
-
-relevant_articles = relevant_articles[:max_items]
+    # Show chat history
+    for sender, message in reversed(st.session_state.chat_history):
+        if sender == "You":
+            st.markdown(f"**🧑 You:** {message}")
+        else:
+            st.markdown(f"{message}")
+        st.markdown("---")
 
 # -----------------------------
-# TABS
+# RIGHT SIDE: DOCUMENT UPLOAD
 # -----------------------------
-tab1, tab2 = st.tabs(["📊 Executive Briefs", "💬 Ask Luciolle"])
+with col2:
+    st.subheader("📄 Upload Documents")
+
+    uploaded_files = st.file_uploader(
+        "Drag & drop PDF or Word files",
+        accept_multiple_files=True,
+        type=["pdf", "docx", "txt"]
+    )
+
+    if uploaded_files:
+        combined_text = ""
+
+        for file in uploaded_files:
+            if file.type == "application/pdf":
+                combined_text += read_pdf(file)
+
+            elif file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                combined_text += read_docx(file)
+
+            else:
+                combined_text += StringIO(file.getvalue().decode("utf-8")).read()
+
+        st.session_state.knowledge_base = combined_text
+        st.success("Documents processed ✅")
+
+    if st.session_state.knowledge_base:
+        st.subheader("📚 Learned Context")
+        st.write(st.session_state.knowledge_base[:1000])
 
 # -----------------------------
-# TAB 1: BRIEFS
+# FOOTER MONITORING VIEW
 # -----------------------------
-with tab1:
-    st.subheader("Executive Briefings")
+st.subheader("📊 Latest Relevant Announcements")
 
-    if not relevant_articles:
-        st.warning("No relevant announcements found.")
-    else:
-        for article in relevant_articles:
-            st.markdown(generate_brief(article, st.session_state.reference_text))
-            st.markdown("---")
+articles = fetch_feed(list(SOURCES.values())[0])
+relevant_articles = [a for a in articles if is_relevant(a)][:5]
 
-# -----------------------------
-# TAB 2: CHAT
-# -----------------------------
-with tab2:
-    st.subheader("Ask Luciolle")
-
-    user_input = st.text_input("Ask a question about policy or announcements")
-
-    if st.button("Submit"):
-        if user_input:
-            response = luciolle_chat(
-                user_input,
-                relevant_articles,
-                st.session_state.reference_text
-            )
-
-            st.session_state.chat_history.append(("You", user_input))
-            st.session_state.chat_history.append(("Luciolle", response))
-
-    # Display chat
-    for speaker, message in st.session_state.chat_history:
-        st.markdown(f"**{speaker}:** {message}")
+for article in relevant_articles:
+    st.markdown(f"### {article['title']}")
+    st.write(article["summary"][:200] + "...")
+    st.markdown(article["link"])
+    st.markdown("---")
+``
